@@ -201,3 +201,4 @@ C:\Users\Stefan\source\repos\AlertManager2\AlertManager2\obj\Release\net8.0\win-
 C:\Users\Stefan\source\repos\AlertManager2\AlertManager2\obj\Release\net8.0\win-x86\AlertManager2.pdb
 C:\Users\Stefan\source\repos\AlertManager2\AlertManager2\obj\Release\net8.0\win-x86\AlertManager2.genruntimeconfig.cache
 C:\Users\Stefan\source\repos\AlertManager2\AlertManager2\obj\Release\net8.0\win-x86\ref\AlertManager2.dll
+C:\Users\Stefan\source\repos\AlertManager2\AlertManager2\obj\Release\net8.0\win-x86\AlertManager2.sourcelink.json

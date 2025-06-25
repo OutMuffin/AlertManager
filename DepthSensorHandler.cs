@@ -9,119 +9,176 @@ namespace AlertManager2
 {
     internal static class DepthSensorHandler
     {
+        // Begge alert‐navnene støttes
         private const string AlertDepthMissing = "depth sensor missing";
+        private const string AlertDepthMalfunctioning = "Depth sensor is malfunctioning";
+
+        // HashSet for rask sjekk
+        private static readonly HashSet<string> DepthSensorAlerts =
+            new() { AlertDepthMissing, AlertDepthMalfunctioning };
 
         /* -------------------------------------------------------
-         *  Tast "d" i hovedmenyen
+         *  Tast "d" i hovedmenyen  (batch-fix for BEGGE typer)
          * ----------------------------------------------------- */
         public static async Task HandleBatchFixAsync(AlertFetcher fetcher)
         {
             var depthAlerts = (await fetcher.FetchUnsilencedAlerts())
                               .Where(a => a.Labels.TryGetValue("alertname", out var n) &&
-                                          n == AlertDepthMissing)
+                                          DepthSensorAlerts.Contains(n))
                               .ToList();
 
             if (depthAlerts.Count == 0)
             {
-                Console.WriteLine("✅ Ingen depth-sensor-alarmer funnet.");
+                Console.WriteLine("✅ Ingen depth-sensor-alarmer (missing / malfunctioning) funnet.");
                 return;
             }
 
             var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmm");
             var logPath = $"depth_fix_{timestamp}.csv";
-            await File.WriteAllTextAsync(logPath, "timestamp,device_id,fix_type\n");
+            await File.WriteAllTextAsync(logPath, "timestamp,device_id,fix_method\n");
 
-            var allIds = depthAlerts.Select(a => a.Labels["device_id"]).ToList();
-            await SmoothRestartAsync(fetcher, depthAlerts, logPath);
+            var failedIds = new List<string>();
 
-            var stillFailing = (await fetcher.FetchUnsilencedAlerts())
-                               .Where(a => a.Labels.TryGetValue("alertname", out var n) &&
-                                           n == AlertDepthMissing)
-                               .Select(a => a.Labels["device_id"])
-                               .Where(allIds.Contains)
-                               .ToHashSet();
-
-            if (stillFailing.Count == 0)
+            foreach (var alert in depthAlerts)
             {
-                Console.WriteLine("🎉 Alle sensorer ble fikset av smooth-restart!");
+                if (!alert.Labels.TryGetValue("device_id", out var deviceId) ||
+                    !alert.Labels.TryGetValue("port_number", out var portStr) ||
+                    !int.TryParse(portStr, out var port))
+                    continue;
+
+                var fixedOk = await SmoothRestartAsync(fetcher, deviceId, port);
+
+                var method = fixedOk ? "restart_or_fallback" : "failed";
+                await File.AppendAllTextAsync(logPath,
+                    $"{DateTime.Now},{deviceId},{method}\n");
+
+                if (!fixedOk)
+                    failedIds.Add(deviceId);
+            }
+
+            if (failedIds.Count == 0)
+            {
+                Console.WriteLine("🎉 Alle sensorer ble fikset av smooth/fallback!");
                 Console.WriteLine($"📄 Logg: {Path.GetFullPath(logPath)}");
                 return;
             }
 
-            await RebootAsync(fetcher, stillFailing.ToList(), logPath);
+            await RebootAsync(fetcher, failedIds, logPath);
 
             Console.WriteLine("🏁 Batch-fix ferdig.");
             Console.WriteLine($"📄 Loggfil: {Path.GetFullPath(logPath)}");
         }
 
         /* ------------------------------------------------------
-         *  Manuell enkelt-alert
+         *  Manuell enkelt-alert (interaktiv SSH)
          * ---------------------------------------------------- */
         public static void HandleDepthSensorAlert(Alert alert)
         {
             string portStr = alert.Labels.TryGetValue("port_number", out var p) ? p : "22";
             int port = int.TryParse(portStr, out var pn) ? pn : 22;
 
-            Console.WriteLine($"🔍 Depth sensor missing – port {port}");
+            string alertName = alert.Labels.TryGetValue("alertname", out var n) ? n : "(ukjent alert)";
+            Console.WriteLine($"🔍 {alertName} – port {port}");
             Process.Start(new ProcessStartInfo
             {
                 FileName = "cmd.exe",
-                Arguments = $"/k ssh camera -p {port}",
+                Arguments = $"/k ssh -t -p {port} camera",
                 UseShellExecute = true
             });
         }
 
         /* ------------------------------------------------------
-         *  SMOOTH-RESTART med smart fallback
+         *  SMOOTH-RESTART + to alternative fallback-stier
          * ---------------------------------------------------- */
-        private static async Task SmoothRestartAsync(
+        private static async Task<bool> SmoothRestartAsync(
             AlertFetcher fetcher,
-            List<Alert> alerts,
-            string logPath)
+            string deviceId,
+            int port)
         {
-            foreach (var a in alerts)
+            /* ----------  STI 1: smooth-operator ---------- */
+            Console.WriteLine($"⚙️  Prøver restart av smooth-operator på {deviceId} …");
+            bool opRestartOk = await RunSshCommand(
+                                    port,
+                                    "sudo systemctl restart smooth-operator",
+                                    10);
+
+            if (opRestartOk)
             {
-                if (!a.Labels.TryGetValue("port_number", out var portStr) ||
-                    !int.TryParse(portStr, out var port))
-                    continue;
-
-                string deviceId = a.Labels["device_id"];
-
-                // --- prøv først "smooth" -------------------------
-                Console.WriteLine($"🔧 restart smooth på port {port}");
-                bool ok = await RunSshCommand(port, "sudo systemctl restart smooth");
-
-                // hvis smooth feiler, prøv smooth-operator
-                if (!ok)
+                await Task.Delay(TimeSpan.FromSeconds(60));
+                if (!await SensorStillAlerting(fetcher, deviceId))
                 {
-                    Console.WriteLine($"⚠️  smooth feilet – prøver smooth-operator på port {port}");
-                    ok = await RunSshCommand(port, "sudo systemctl restart smooth-operator");
+                    Console.WriteLine($"✅ Alarm løst etter restart av smooth-operator ({deviceId})");
+                    return true;
                 }
 
-                if (!ok)
-                    Console.WriteLine($"❌ Ingen restart-kommando fungerte på port {port}");
+                Console.WriteLine($"🔁 Alarm fortsatt aktiv – kjører fallback på smooth-operator …");
+                bool opStop = await RunSshCommand(port, "sudo systemctl stop smooth-operator", 10);
+                bool opUpload = await RunSshCommand(port, "sudo smooth-operator aquaino upload --force", 20);
+                bool opStart = await RunSshCommand(port, "sudo systemctl start smooth-operator", 10);
 
-                await Task.Delay(300);
+                if (opStop && opUpload && opStart)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(60));
+                    if (!await SensorStillAlerting(fetcher, deviceId))
+                    {
+                        Console.WriteLine($"✅ Alarm løst etter fallback (smooth-operator) på {deviceId}");
+                        return true;
+                    }
+                }
+                Console.WriteLine($"❌ Fallback smooth-operator feilet på {deviceId}");
+            }
+            else
+            {
+                Console.WriteLine($"⚠️  smooth-operator restart feilet – prøver smooth på {deviceId}");
             }
 
-            Console.WriteLine("⏳ 1 min vent etter restart …");
-            await Task.Delay(TimeSpan.FromMinutes(1));
+            /* ----------  STI 2: smooth ---------- */
+            Console.WriteLine($"⚙️  Prøver restart av smooth på {deviceId} …");
+            bool smoothRestartOk = await RunSshCommand(
+                                        port,
+                                        "sudo systemctl restart smooth",
+                                        10);
 
-            var unresolved = (await fetcher.FetchUnsilencedAlerts())
-                             .Where(a => a.Labels.TryGetValue("alertname", out var n) &&
-                                         n == AlertDepthMissing)
-                             .Select(a => a.Labels["device_id"])
-                             .ToHashSet();
+            if (smoothRestartOk)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(60));
+                if (!await SensorStillAlerting(fetcher, deviceId))
+                {
+                    Console.WriteLine($"✅ Alarm løst etter restart av smooth ({deviceId})");
+                    return true;
+                }
 
-            var resolved = alerts
-                           .Select(a => a.Labels["device_id"])
-                           .Except(unresolved)
-                           .ToList();
+                Console.WriteLine($"🔁 Alarm fortsatt aktiv – kjører fallback på smooth …");
+                bool smStop = await RunSshCommand(port, "sudo systemctl stop smooth", 10);
+                bool smUpload = await RunSshCommand(port, "sudo /opt/smooth aquaino upload --force", 20);
+                bool smStart = await RunSshCommand(port, "sudo systemctl start smooth", 10);
 
-            await File.AppendAllLinesAsync(logPath,
-                resolved.Select(id => $"{DateTime.Now},{id},smooth"));
+                if (smStop && smUpload && smStart)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(60));
+                    if (!await SensorStillAlerting(fetcher, deviceId))
+                    {
+                        Console.WriteLine($"✅ Alarm løst etter fallback (smooth) på {deviceId}");
+                        return true;
+                    }
+                }
+                Console.WriteLine($"❌ Fallback smooth feilet på {deviceId}");
+            }
+            else
+            {
+                Console.WriteLine($"❌ smooth restart feilet på {deviceId}");
+            }
 
-            Console.WriteLine($"✅ {resolved.Count} fikset av restart.");
+            /* Begge stier feilet */
+            return false;
+        }
+
+        private static async Task<bool> SensorStillAlerting(AlertFetcher fetcher, string deviceId)
+        {
+            var alerts = await fetcher.FetchUnsilencedAlerts();
+            return alerts.Any(a =>
+                   a.Labels.TryGetValue("device_id", out var id) && id == deviceId &&
+                   a.Labels.TryGetValue("alertname", out var an) && DepthSensorAlerts.Contains(an));
         }
 
         /* ------------------------------------------------------
@@ -133,7 +190,9 @@ namespace AlertManager2
             string logPath)
         {
             var alerts = (await fetcher.FetchUnsilencedAlerts())
-                         .Where(a => deviceIds.Contains(a.Labels["device_id"]))
+                         .Where(a =>
+                                a.Labels.TryGetValue("device_id", out var id) &&
+                                deviceIds.Contains(id))
                          .ToList();
 
             foreach (var a in alerts)
@@ -142,7 +201,7 @@ namespace AlertManager2
                     !int.TryParse(portStr, out var port))
                     continue;
 
-                Console.WriteLine($"🔄 reboot på port {port}");
+                Console.WriteLine($"🔄 Reboot på port {port}");
                 await RunSshCommand(port, "sudo /sbin/reboot");
                 await Task.Delay(300);
             }
@@ -151,9 +210,11 @@ namespace AlertManager2
             await Task.Delay(TimeSpan.FromMinutes(10));
 
             var after = (await fetcher.FetchUnsilencedAlerts())
-                        .Where(a => a.Labels.TryGetValue("alertname", out var n) &&
-                                    n == AlertDepthMissing &&
-                                    deviceIds.Contains(a.Labels["device_id"]))
+                        .Where(a =>
+                               a.Labels.TryGetValue("alertname", out var n) &&
+                               DepthSensorAlerts.Contains(n) &&
+                               a.Labels.TryGetValue("device_id", out var id) &&
+                               deviceIds.Contains(id))
                         .Select(a => a.Labels["device_id"])
                         .ToHashSet();
 
@@ -167,7 +228,7 @@ namespace AlertManager2
         }
 
         /* ------------------------------------------------------
-         *  SSH helper – timeout 10 s, returnerer true/false
+         *  SSH-helper – timeout, logging
          * ---------------------------------------------------- */
         private static async Task<bool> RunSshCommand(
             int port,
@@ -176,9 +237,10 @@ namespace AlertManager2
         {
             var psi = new ProcessStartInfo
             {
-                FileName = "ssh",
-                Arguments = $"-p {port} camera \"{command}\"",
+                FileName = Path.Combine(AppContext.BaseDirectory, "ssh.exe"),
+                Arguments = $"-t -p {port} camera \"{command}\"",
                 RedirectStandardError = true,
+                RedirectStandardOutput = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
@@ -188,34 +250,43 @@ namespace AlertManager2
             try
             {
                 proc.Start();
+
+                var stdoutTask = proc.StandardOutput.ReadToEndAsync();
                 var stderrTask = proc.StandardError.ReadToEndAsync();
-                var exitTask = proc.WaitForExitAsync();            // <─ lagres her
+                var exitTask = proc.WaitForExitAsync();
 
                 var completed = await Task.WhenAny(
                                     exitTask,
                                     Task.Delay(TimeSpan.FromSeconds(timeoutSeconds)));
 
-                if (completed != exitTask)                           // timeout
+                if (completed != exitTask)
                 {
-                    try { proc.Kill(true); } catch { /* ignorer */ }
+                    try { proc.Kill(entireProcessTree: true); } catch { /* ignore */ }
                     Console.WriteLine($"⏱️  SSH-timeout på port {port}");
                     return false;
                 }
 
-                bool ok = proc.ExitCode == 0;
-                if (!ok)
+                var stdout = (await stdoutTask).Trim();
+                var stderr = (await stderrTask).Trim();
+
+                if (!string.IsNullOrEmpty(stdout))
+                    Console.WriteLine($"📤 STDOUT [{port}]: {stdout}");
+                if (!string.IsNullOrEmpty(stderr))
+                    Console.WriteLine($"📥 STDERR [{port}]: {stderr}");
+
+                if (proc.ExitCode != 0)
                 {
-                    var err = await stderrTask;
-                    Console.WriteLine($"❌ SSH-feil (exit {proc.ExitCode}) på port {port}: {err.Trim()}");
+                    Console.WriteLine($"❌ SSH-exit {proc.ExitCode} på port {port} (cmd: {command})");
+                    return false;
                 }
-                return ok;
+
+                return true;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"💥 Feil ved SSH på port {port}: {ex.Message}");
+                Console.WriteLine($"💥 SSH-exception på port {port}: {ex.Message}");
                 return false;
             }
         }
-
     }
 }
