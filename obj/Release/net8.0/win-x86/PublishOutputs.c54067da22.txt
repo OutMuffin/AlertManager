@@ -1,0 +1,2 @@
+C:\Users\Stefan\source\repos\AlertManager2\AlertManager2\bin\Release\net8.0\publish\win-x86\AlertManager2.pdb
+C:\Users\Stefan\source\repos\AlertManager2\AlertManager2\bin\Release\net8.0\publish\win-x86\AlertManager2.exe
