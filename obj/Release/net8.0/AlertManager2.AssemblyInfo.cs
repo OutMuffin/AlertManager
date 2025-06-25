@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("AlertManager2")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+edc8f0f7531d78c173509eb3591f3df646c0f3c3")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+182e9796a8edfc25202488bf4a2fe2b21a97c5d4")]
 [assembly: System.Reflection.AssemblyProductAttribute("AlertManager2")]
 [assembly: System.Reflection.AssemblyTitleAttribute("AlertManager2")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

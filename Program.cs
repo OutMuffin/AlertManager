@@ -95,24 +95,28 @@ class Program
 
             if (input == "f")
             {
-                await BulkSilence(alertFetcher, alerts, silenceManager,
-                                  AlertFlicker, "Quick silence for flickering lights");
+                await BulkSilenceWithRecheck(alertFetcher, alerts, silenceManager,
+                                             AlertFlicker, "Quick silence for flickering lights",
+                                             TimeSpan.FromMinutes(5));
                 continue;
             }
 
             if (input == "t")
             {
-                await BulkSilence(alertFetcher, alerts, silenceManager,
-                                  AlertTilt, "Quick silence for camera tilt");
+                await BulkSilenceWithRecheck(alertFetcher, alerts, silenceManager,
+                                             AlertTilt, "Quick silence for camera tilt",
+                                             TimeSpan.FromMinutes(5));
                 continue;
             }
 
             if (input == "w")
             {
-                await BulkSilence(alertFetcher, alerts, silenceManager,
-                                  AlertWinch, "Quick silence for winch errors");
+                await BulkSilenceWithRecheck(alertFetcher, alerts, silenceManager,
+                                             AlertWinch, "Quick silence for winch errors",
+                                             TimeSpan.FromMinutes(5));
                 continue;
             }
+
 
             /* --- individual alert flow ------------------------- */
 
@@ -161,25 +165,42 @@ class Program
     }
 
     /* --- helper: generic bulk-silence by alertname -------------- */
-    static async Task BulkSilence(AlertFetcher fetcher,
-                                  List<Alert> view,
-                                  SilenceManager mgr,
-                                  string alertName,
-                                  string comment)
+    static async Task BulkSilenceWithRecheck(AlertFetcher fetcher,
+                                             List<Alert> view,
+                                             SilenceManager mgr,
+                                             string alertName,
+                                             string comment,
+                                             TimeSpan silenceDuration)
     {
-        var matches = fetcher.FilterByAlertName(view, alertName);
-
-        if (matches.Count == 0)
+        var initial = fetcher.FilterByAlertName(view, alertName);
+        if (initial.Count == 0)
         {
             WriteColored($"No '{alertName}' alerts found in current view.", ConsoleColor.Yellow);
             return;
         }
 
-        foreach (var a in matches)
-            await mgr.SilenceAlert(a, "pen", TimeSpan.FromMinutes(60), comment);
+        // Silence all now
+        foreach (var a in initial)
+            await mgr.SilenceAlert(a, "pen", silenceDuration, comment);
+        WriteColored($"🔕 Silenced {initial.Count} '{alertName}' alerts for {silenceDuration.TotalMinutes} min.\n" +
+                     "⏳ Venter 10 minutter for å se om noen dukker opp igjen…",
+                     ConsoleColor.Cyan);
 
-        WriteColored($"✅ Silenced {matches.Count} alerts of type '{alertName}' for 60 min.",
-                     ConsoleColor.Green);
+        await Task.Delay(TimeSpan.FromMinutes(10));
+
+        // Fetch alerts again
+        var after10 = await fetcher.FetchUnsilencedAlerts();
+        var stillFlickering = fetcher.FilterByAlertName(after10, alertName);
+
+        if (stillFlickering.Count == 0)
+        {
+            WriteColored("✅ Ingen 'lights are flickering'‑alarmer dukket opp igjen etter 10 min.", ConsoleColor.Green);
+            return;
+        }
+
+        WriteColored("⚠️ Følgende 'lights are flickering'‑alarmer er fortsatt aktive etter 10 min:", ConsoleColor.Yellow);
+        foreach (var a in stillFlickering)
+            Console.WriteLine($" - {a.Labels["device_id"]} ({a.Labels["pen_name"]})");
     }
 
     /* --- helper: show details & camera reachability ------------- */
