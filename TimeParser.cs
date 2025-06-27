@@ -8,12 +8,35 @@ namespace AlertManager2
 {
     public static class TimeParser
     {
+        // Eksempel på eksisterende Parse (behold det du allerede har her)
+        // Dette er bare en very simple dummy – din versjon kan være mer avansert.
         public static TimeSpan Parse(string input)
         {
-            if (input.EndsWith("h")) return TimeSpan.FromHours(double.Parse(input.TrimEnd('h')));
-            if (input.EndsWith("m")) return TimeSpan.FromMinutes(double.Parse(input.TrimEnd('m')));
-            if (input.EndsWith("d")) return TimeSpan.FromDays(double.Parse(input.TrimEnd('d')));
-            throw new ArgumentException("Invalid duration format. Use '2h', '30m', or '1d'.");
+            input = input.Trim().ToLower();
+            if (input.EndsWith("h"))
+                return TimeSpan.FromHours(double.Parse(input[..^1]));
+            if (input.EndsWith("m"))
+                return TimeSpan.FromMinutes(double.Parse(input[..^1]));
+            if (input.EndsWith("d"))
+                return TimeSpan.FromDays(double.Parse(input[..^1]));
+
+            // fall-back (eks: “00:30:00”)
+            return TimeSpan.Parse(input);
+        }
+
+        // NY wrapper – gjør at alle "TryParse"-kall virker
+        public static bool TryParse(string input, out TimeSpan result)
+        {
+            try
+            {
+                result = Parse(input);
+                return true;
+            }
+            catch
+            {
+                result = default;
+                return false;
+            }
         }
     }
 }
