@@ -22,7 +22,7 @@ namespace AlertManager2
                    $"&var-Job={job}" +
                    $"&var-Pen={pen}" +
                    $"&var-Deviceid={device}" +
-                   $"&from=now-3h&to=now";
+                   $"&from=now-1d&to=now";
         }
 
 
