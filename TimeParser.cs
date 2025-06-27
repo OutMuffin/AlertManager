@@ -29,7 +29,7 @@ namespace AlertManager2
         {
             try
             {
-                result = Parse(input);
+                result = Parse(input);   // bruker din eksisterende Parse-logikk
                 return true;
             }
             catch
@@ -38,5 +38,6 @@ namespace AlertManager2
                 return false;
             }
         }
+
     }
 }

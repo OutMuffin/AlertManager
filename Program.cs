@@ -172,8 +172,17 @@ class Program
 
         WriteColored($"⚠️ The following '{alertName}' alerts are still active after 10 min:",
                      ConsoleColor.Yellow);
+
+        /* --- FIX: safe label lookup --------------------------- */
         foreach (var a in stillPresent)
-            Console.WriteLine($" - {a.Labels["device_id"]} ({a.Labels["pen_name"]})");
+        {
+            // Try device_id, fall back to pfe_number, else "unknown"
+            string device = a.Labels.TryGetValue("device_id", out var d) ? d :
+                            a.Labels.TryGetValue("pfe_number", out var p) ? p : "unknown";
+
+            string pen = a.Labels.TryGetValue("pen_name", out var pn) ? pn : "unknown";
+            Console.WriteLine($" - {device} (pen: {pen})");
+        }
     }
 
     /* --- helper: bulk-silence *TILT* with re-check ------------- */
@@ -209,12 +218,14 @@ class Program
 
         WriteColored($"⚠️ The following '{AlertTilt}' alerts are still active after 10 minutes:",
                      ConsoleColor.Yellow);
+
         foreach (var a in stillTilt)
         {
-            if (a.Labels.TryGetValue("pfe_number", out var pfe))
-                Console.WriteLine($" - PFE: {pfe} (pen: {a.Labels["pen_name"]})");
-            else
-                Console.WriteLine($" - unknown PFE (pen: {a.Labels["pen_name"]})");
+            string pfe = a.Labels.TryGetValue("pfe_number", out var p) ? p :
+                         a.Labels.TryGetValue("device_id", out var d) ? d : "unknown";
+
+            string pen = a.Labels.TryGetValue("pen_name", out var pn) ? pn : "unknown";
+            Console.WriteLine($" - PFE: {pfe} (pen: {pen})");
         }
     }
 
