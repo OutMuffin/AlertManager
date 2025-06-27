@@ -13,7 +13,7 @@ namespace AlertManager2
             string baseUrl = "https://grafana.aquabyte.ai/d/3NFqNEoGz/all-farms-with-details";
             string site = Uri.EscapeDataString(labels.GetValueOrDefault("site_name", "All"));
             string pen = Uri.EscapeDataString(labels.GetValueOrDefault("pen_name", "All"));
-            string job = Uri.EscapeDataString(labels.GetValueOrDefault("job", "All"));
+            string job = Uri.EscapeDataString("node-exporter");  // hardcoded
             string device = Uri.EscapeDataString(labels.GetValueOrDefault("device_id", "All"));
 
             return $"{baseUrl}?" +
@@ -24,6 +24,7 @@ namespace AlertManager2
                    $"&var-Deviceid={device}" +
                    $"&from=now-3h&to=now";
         }
+
 
         public static string GenerateBrain2Url(Dictionary<string, string> labels)
         {
